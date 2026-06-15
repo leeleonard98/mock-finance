@@ -17,6 +17,8 @@ from datetime import date
 from decimal import Decimal
 from statistics import mean, pstdev
 
+from sqlalchemy.orm import Session
+
 from app.models import Transaction
 
 
@@ -78,3 +80,28 @@ def detect(
             )
         )
     return sorted(out, key=lambda s: s.merchant)
+
+
+def mark_recurring(db: Session, user_id: str) -> list[DetectedSubscription]:
+    """Run detect() over the user's transactions and flip is_recurring=True
+    on any transaction that's part of a detected subscription. Returns the
+    list of subscriptions found (so the route can return them too)."""
+    from sqlalchemy import select
+
+    rows = (
+        db.execute(
+            select(Transaction).where(Transaction.user_id == user_id)
+        )
+        .scalars()
+        .all()
+    )
+    subs = detect(list(rows))
+    flagged: set[int] = set()
+    for s in subs:
+        flagged.update(s.transaction_ids)
+    if flagged:
+        for tx in rows:
+            if tx.id in flagged:
+                tx.is_recurring = True
+        db.commit()
+    return subs

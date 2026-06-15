@@ -15,6 +15,7 @@ from app.classifier import classify_transactions, coerce_category
 from app.csv_parser import CSVParseError, parse_csv
 from app.db import get_db
 from app.models import Transaction
+from app.subscriptions import mark_recurring
 
 router = APIRouter(prefix="/users/{user_id}/transactions", tags=["transactions"])
 
@@ -111,4 +112,34 @@ def list_transactions(
     return TransactionList(
         user_id=user_id,
         items=[TransactionOut.model_validate(r) for r in rows],
+    )
+
+
+class SubscriptionOut(BaseModel):
+    merchant: str
+    monthly_amount: Decimal
+    occurrences: int
+    last_seen: date
+
+
+class SubscriptionList(BaseModel):
+    user_id: str
+    items: list[SubscriptionOut]
+
+
+@router.get("/subscriptions", response_model=SubscriptionList, tags=["subscriptions"])
+def list_subscriptions(user_id: str, db: Session = Depends(get_db)) -> SubscriptionList:
+    """Detect subscriptions and (idempotently) flip is_recurring on matched rows."""
+    subs = mark_recurring(db, user_id)
+    return SubscriptionList(
+        user_id=user_id,
+        items=[
+            SubscriptionOut(
+                merchant=s.merchant,
+                monthly_amount=s.monthly_amount,
+                occurrences=s.occurrences,
+                last_seen=s.last_seen,
+            )
+            for s in subs
+        ],
     )
