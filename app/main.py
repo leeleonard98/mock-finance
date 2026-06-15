@@ -17,7 +17,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.routers import budget
+from app.routers import budget, transactions
 
 
 class HealthResponse(BaseModel):
@@ -49,6 +49,7 @@ def create_app() -> FastAPI:
 
     # Per-feature routers mount here, e.g. `app.include_router(budget.router)`.
     app.include_router(budget.router)
+    app.include_router(transactions.router)
 
     return app
 
