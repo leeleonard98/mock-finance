@@ -17,7 +17,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.routers import budget, tools, transactions
+from app.routers import budget, chat, tools, transactions
 
 
 class HealthResponse(BaseModel):
@@ -51,6 +51,7 @@ def create_app() -> FastAPI:
     app.include_router(budget.router)
     app.include_router(transactions.router)
     app.include_router(tools.router)
+    app.include_router(chat.router)
 
     return app
 

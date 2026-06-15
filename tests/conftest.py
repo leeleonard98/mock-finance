@@ -193,3 +193,59 @@ def script_classifier(
 
     monkeypatch.setattr(tx_router, "classify_transactions", s.classify)
     yield s
+
+
+# ---------------------------------------------------------------------------
+# Scripted advisor LLM fixtures (F5)
+# ---------------------------------------------------------------------------
+
+
+class ScriptedLLM:
+    """Drives a fake multi-turn LLM for the advisor tests."""
+
+    def __init__(self) -> None:
+        self.script: list[dict] = []
+        self.calls: list[dict] = []
+
+    def chat(self, *, messages, tools, **_):
+        self.calls.append({"messages": list(messages), "tools": tools})
+        if not self.script:
+            return {"content": "DONE", "tool_calls": []}
+        return self.script.pop(0)
+
+
+@pytest.fixture
+def script_llm(monkeypatch: pytest.MonkeyPatch) -> Iterator[ScriptedLLM]:
+    from app.agents import advisor as advisor_module
+
+    s = ScriptedLLM()
+    monkeypatch.setattr(advisor_module, "llm_chat", s.chat)
+    yield s
+
+
+class StreamScripted:
+    """Drives a fake streaming LLM for the streaming tests."""
+
+    def __init__(self) -> None:
+        self.script: list[dict] = []
+        self.calls: list[dict] = []
+
+    def chat_stream(self, *, messages, tools, **_):
+        self.calls.append({"messages": list(messages), "tools": tools})
+        if not self.script:
+            yield {"delta": "DONE", "done": False}
+            yield {"delta": "", "done": True, "tool_calls": []}
+            return
+        entry = self.script.pop(0)
+        for chunk in entry.get("chunks", []):
+            yield {"delta": chunk, "done": False}
+        yield {"delta": "", "done": True, "tool_calls": entry.get("tool_calls", [])}
+
+
+@pytest.fixture
+def stream_llm(monkeypatch: pytest.MonkeyPatch) -> Iterator[StreamScripted]:
+    from app.agents import advisor as advisor_module
+
+    s = StreamScripted()
+    monkeypatch.setattr(advisor_module, "llm_chat_stream", s.chat_stream)
+    yield s
