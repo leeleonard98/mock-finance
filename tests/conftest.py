@@ -128,3 +128,68 @@ def mock_llm(monkeypatch: pytest.MonkeyPatch) -> Iterator[MockLLM]:
     mock = MockLLM()
     monkeypatch.setattr(llm_module, "complete", mock)
     yield mock
+
+
+# ---------------------------------------------------------------------------
+# Classifier mock — F3
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _silence_classifier(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Default: classify_transactions returns 'other' for everything.
+
+    Tests that exercise the classifier wiring install their own monkeypatch
+    via the script_classifier fixture below — that override wins.
+
+    We patch BOTH the module-level function AND the import-site in the
+    transactions router, because the router does
+    `from app.classifier import classify_transactions` which binds the name
+    locally — patching only `app.classifier.classify_transactions` would
+    leave the router's local binding pointing at the real function.
+    """
+    try:
+        from app import classifier as cl
+    except ImportError:
+        yield
+        return
+    stub = lambda d: ["other"] * len(d)
+    monkeypatch.setattr(cl, "classify_transactions", stub)
+    try:
+        from app.routers import transactions as tx_router
+
+        monkeypatch.setattr(tx_router, "classify_transactions", stub)
+    except (ImportError, AttributeError):
+        pass
+    yield
+
+
+class ScriptedClassifier:
+    """Records calls to classify_transactions and returns scripted values."""
+
+    def __init__(self) -> None:
+        self.calls: list[list[str]] = []
+        self.return_values: list[list[str]] = []  # popped per call
+
+    def classify(self, descriptions: list[str]) -> list[str]:
+        self.calls.append(list(descriptions))
+        if self.return_values:
+            return self.return_values.pop(0)
+        return ["other"] * len(descriptions)
+
+
+@pytest.fixture
+def script_classifier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[ScriptedClassifier]:
+    """Replace classify_transactions with a recording, configurable stub."""
+    s = ScriptedClassifier()
+    from app import classifier as cl
+
+    monkeypatch.setattr(cl, "classify_transactions", s.classify)
+    # Also patch the import-site in transactions router (it imports the
+    # function directly at module load).
+    from app.routers import transactions as tx_router
+
+    monkeypatch.setattr(tx_router, "classify_transactions", s.classify)
+    yield s

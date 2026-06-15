@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.classifier import classify_transactions, coerce_category
 from app.csv_parser import CSVParseError, parse_csv
 from app.db import get_db
 from app.models import Transaction
@@ -67,16 +68,24 @@ async def upload_transactions(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)
         ) from e
 
+    new_txs: list[Transaction] = []
     for r in rows:
         tx = Transaction(
             user_id=user_id,
             posted_at=r.posted_at,
             description=r.description,
             amount=r.amount,
-            category="other",  # F3 will replace this
+            category="other",  # F3 replaces this below
             source_file=file.filename,
         )
         db.add(tx)
+        new_txs.append(tx)
+    # F3: ask the LLM to categorise all rows in one batched call.
+    if new_txs:
+        cats = classify_transactions([r.description for r in rows])
+        # Defence in depth: even if the seam returns junk, coerce to known set.
+        for tx, cat in zip(new_txs, cats, strict=False):
+            tx.category = coerce_category(cat)
     db.commit()
     return UploadResponse(count=len(rows), filename=file.filename or "")
 
