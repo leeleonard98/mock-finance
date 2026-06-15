@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Smart Financial Advisor</title>
+  <link rel="stylesheet" href="/static/app.css" />
+</head>
+<body>
+  <header>
+    <h1>💰 Smart Financial Advisor</h1>
+    <div class="header-right">
+      <input id="user_id" placeholder="user id" value="alice" />
+      <small id="session-info">no session</small>
+    </div>
+  </header>
+
+  <div class="layout">
+    <aside id="sidebar">
+      <h2>Budget</h2>
+      <div id="budget-panel">
+        <em>Set your monthly cap below.</em>
+      </div>
+
+      <h2>Upload statement</h2>
+      <form id="upload-form" enctype="multipart/form-data">
+        <input type="file" id="csv-file" accept=".csv" />
+        <button type="submit">Upload CSV</button>
+        <div id="upload-status"></div>
+      </form>
+
+      <h2>This month</h2>
+      <div id="dashboard">
+        <em>Upload a CSV to see your spending.</em>
+      </div>
+    </aside>
+
+    <main id="chat">
+      <div id="messages" aria-live="polite"></div>
+      <form id="composer">
+        <textarea id="prompt" placeholder="Can I spend $500 on a phone this month?" rows="2"></textarea>
+        <button type="submit">Ask</button>
+      </form>
+    </main>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let sessionId = null;
+
+    function userId() { return $("user_id").value.trim() || "anon"; }
+
+    function renderMessage(m) {
+      const div = document.createElement("div");
+      div.className = `msg msg-${m.role}`;
+      const role = document.createElement("strong");
+      role.textContent = m.role;
+      div.appendChild(role);
+      div.appendChild(document.createTextNode(": "));
+      const body = document.createElement("span");
+      body.textContent = m.content;
+      div.appendChild(body);
+      $("messages").appendChild(div);
+      $("messages").scrollTop = $("messages").scrollHeight;
+    }
+
+    async function ensureSession() {
+      if (sessionId) return sessionId;
+      const r = await fetch("/sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_id: userId() }),
+      });
+      const s = await r.json();
+      sessionId = s.id;
+      $("session-info").textContent = `session #${sessionId}`;
+      return sessionId;
+    }
+
+    async function refreshBudget() {
+      const r = await fetch(`/users/${encodeURIComponent(userId())}/budget`);
+      const panel = $("budget-panel");
+      panel.innerHTML = "";
+      if (!r.ok) {
+        const setForm = document.createElement("div");
+        const input = document.createElement("input");
+        input.id = "budget-input";
+        input.placeholder = "monthly cap (e.g. 3000)";
+        const btn = document.createElement("button");
+        btn.textContent = "Set";
+        btn.addEventListener("click", async () => {
+          const cap = $("budget-input").value;
+          await fetch(`/users/${encodeURIComponent(userId())}/budget`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ monthly_cap: cap }),
+          });
+          refreshBudget(); refreshDashboard();
+        });
+        setForm.appendChild(input); setForm.appendChild(btn);
+        panel.appendChild(setForm);
+        return;
+      }
+      const b = await r.json();
+      const p = document.createElement("p");
+      p.textContent = `${b.currency} ${b.monthly_cap} per month`;
+      panel.appendChild(p);
+    }
+
+    async function refreshDashboard() {
+      const r = await fetch(`/users/${encodeURIComponent(userId())}/dashboard`);
+      if (!r.ok) return;
+      const d = await r.json();
+      const panel = $("dashboard");
+      panel.innerHTML = "";
+      const summary = document.createElement("p");
+      summary.textContent = d.cap
+        ? `Spent ${d.spent} / ${d.cap} (${d.remaining} left)`
+        : `Spent ${d.spent} this month`;
+      panel.appendChild(summary);
+      if (d.top_3.length) {
+        const ul = document.createElement("ul");
+        for (const t of d.top_3) {
+          const li = document.createElement("li");
+          li.textContent = `${t.category}: ${t.amount}`;
+          ul.appendChild(li);
+        }
+        panel.appendChild(ul);
+      }
+    }
+
+    $("upload-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const file = $("csv-file").files[0];
+      if (!file) return;
+      const fd = new FormData();
+      fd.append("file", file);
+      $("upload-status").textContent = "Uploading…";
+      const r = await fetch(`/users/${encodeURIComponent(userId())}/transactions/upload`, {
+        method: "POST", body: fd,
+      });
+      if (!r.ok) {
+        $("upload-status").textContent = `Error: ${r.status}`;
+        return;
+      }
+      const j = await r.json();
+      $("upload-status").textContent = `Uploaded ${j.count} rows.`;
+      refreshDashboard();
+    });
+
+    $("user_id").addEventListener("change", () => {
+      sessionId = null;
+      $("session-info").textContent = "no session";
+      $("messages").innerHTML = "";
+      refreshBudget(); refreshDashboard();
+    });
+
+    $("composer").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const content = $("prompt").value.trim();
+      if (!content) return;
+      const sid = await ensureSession();
+      $("prompt").value = "";
+      renderMessage({ role: "user", content });
+
+      let assistantBody = null;
+      const appendAssistant = (t) => {
+        if (!assistantBody) {
+          const div = document.createElement("div");
+          div.className = "msg msg-assistant";
+          const strong = document.createElement("strong");
+          strong.textContent = "assistant";
+          div.appendChild(strong);
+          div.appendChild(document.createTextNode(": "));
+          assistantBody = document.createElement("span");
+          div.appendChild(assistantBody);
+          $("messages").appendChild(div);
+        }
+        assistantBody.textContent += t;
+      };
+
+      const r = await fetch(`/sessions/${sid}/advise/stream`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ request: content }),
+      });
+      if (!r.ok || !r.body) { appendAssistant(`(error ${r.status})`); return; }
+      const reader = r.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split("\n\n");
+        buf = lines.pop() || "";
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          let evt; try { evt = JSON.parse(line.slice(6)); } catch { continue; }
+          if (evt.type === "token") appendAssistant(evt.delta);
+          else if (evt.type === "tool_call") {
+            const d = document.createElement("div");
+            d.className = "msg msg-tool";
+            d.textContent = `🔧 ${evt.name}(${JSON.stringify(evt.arguments)})`;
+            $("messages").appendChild(d);
+          } else if (evt.type === "tool_result") {
+            const d = document.createElement("div");
+            d.className = "msg msg-tool";
+            d.textContent = `↳ ${evt.name} → ${JSON.stringify(evt.result).slice(0, 200)}`;
+            $("messages").appendChild(d);
+          }
+          $("messages").scrollTop = $("messages").scrollHeight;
+        }
+      }
+      refreshDashboard();
+    });
+
+    refreshBudget(); refreshDashboard();
+  </script>
+</body>
+</html>

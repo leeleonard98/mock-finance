@@ -8,7 +8,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
@@ -17,7 +18,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.routers import budget, chat, tools, transactions
+from app.routers import budget, chat, dashboard, tools, transactions
 
 
 class HealthResponse(BaseModel):
@@ -52,6 +53,12 @@ def create_app() -> FastAPI:
     app.include_router(transactions.router)
     app.include_router(tools.router)
     app.include_router(chat.router)
+    app.include_router(dashboard.router)
+
+    @app.get("/", response_class=HTMLResponse)
+    def index(request: Request) -> HTMLResponse:
+        templates: Jinja2Templates = request.app.state.templates
+        return templates.TemplateResponse(request, "index.html", {})
 
     return app
 
