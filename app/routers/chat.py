@@ -157,6 +157,22 @@ def advise_stream(
     return StreamingResponse(_sse(), media_type="text/event-stream")
 
 
+class ReviewRequest(BaseModel):
+    month: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}$")
+
+
+@router.post("/sessions/{session_id}/review", response_model=AdviseResponse)
+def review(
+    session_id: int, payload: ReviewRequest, db: Session = Depends(get_db)
+) -> AdviseResponse:
+    """F7: Monthly Financial Review. Same loop, different system prompt."""
+    from app.agents.reviewer import ReviewerAgent
+
+    _get_session_or_404(session_id, db)
+    out = ReviewerAgent(db).review(session_id, month=payload.month)
+    return AdviseResponse(**out)
+
+
 @router.get("/sessions/{session_id}/trace", response_model=TraceOut)
 def get_trace(session_id: int, db: Session = Depends(get_db)) -> TraceOut:
     _get_session_or_404(session_id, db)
